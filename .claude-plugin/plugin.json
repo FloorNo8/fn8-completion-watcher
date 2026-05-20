@@ -1,0 +1,6 @@
+{
+  "name": "fn8-completion-watcher",
+  "version": "0.1.0",
+  "description": "Vendor dispatch completion notifications for FN8 mailbox substrate",
+  "entry": "dist/index.js"
+}
