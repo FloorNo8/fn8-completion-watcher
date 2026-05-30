@@ -60,15 +60,26 @@ export function parseInlineStatus(body: string): "ok" | "failed" | undefined {
   return "failed";
 }
 
+// Extract candidate commit SHAs from a result body. ONLY explicit commit
+// declarations are matched — never bare hex tokens. The old loose scan
+// (`\b[0-9a-f]{7,40}\b`) attributed a "commit" to every dispatch by grabbing
+// any hex-looking string anywhere in the body: worktree agent-ids
+// (`agent-aad02b8a1caf...`), ledger-move epoch fragments (`om-1780085944312`
+// — note `1780085` is all hex-valid digits), hash-chain roots, and unrelated
+// SHAs cited in prose. Counter-reviews produce no commit, yet every one got a
+// phantom SHA (6/6 false in one observed session). Candidates returned here
+// are still UNVERIFIED — the caller MUST confirm each against git (existence +
+// committed near the dispatch time) before treating it as the dispatch's commit.
 export function extractCommitShas(text: string): string[] {
   const out = new Set<string>();
-  const commitLine = text.match(/(?:^|\n)\s*(?:commit|Commit)\s*:\s*`?([0-9a-f]{7,40})/im);
-  if (commitLine) out.add(commitLine[1]!.slice(0, 7));
-  const loose = text.match(/\b([0-9a-f]{7,40})\b/g);
-  if (loose) {
-    for (const h of loose) {
-      if (h.length >= 7) out.add(h.slice(0, 7));
-    }
+  const patterns = [
+    /(?:^|\n)\s*(?:commit|Commit)\s*:\s*`?([0-9a-f]{7,40})\b/gm, // "commit: <sha>"
+    /\bcommit\s+([0-9a-f]{40})\b/g, // git log "commit <full-sha>"
+    /\[[^\]\n]{1,80}\s([0-9a-f]{7,12})\]/g, // git porcelain "[branch <sha>] msg"
+  ];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) out.add(m[1]!.slice(0, 40));
   }
   return [...out].slice(0, 8);
 }

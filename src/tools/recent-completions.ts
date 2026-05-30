@@ -3,6 +3,8 @@
  */
 
 import { readFile, stat } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 import { acknowledgedPath, defaultFn8RolesRoot } from "../lib/paths.js";
 import {
@@ -22,6 +24,50 @@ import type { RecentCompletion } from "../types.js";
 
 const SCAN_WINDOW_MS = 24 * 3600 * 1000;
 const MAX_FILES = 100;
+
+// A commit produced by a dispatch carries a committer timestamp close to when
+// the result file is written. Accept a wide window preceding completion (covers
+// long-running dispatches + clock skew) plus a small grace after. A SHA whose
+// committer timestamp falls outside this window = cited-in-prose, not produced
+// by this dispatch.
+const COMMIT_WINDOW_BEFORE_MS = 24 * 3600 * 1000;
+const COMMIT_WINDOW_AFTER_MS = 3600 * 1000;
+
+const execFileAsync = promisify(execFile);
+
+// Verify a candidate SHA actually exists as a commit AND could plausibly have
+// been produced by this dispatch (committer timestamp near `completionMs`).
+// Rejects two false-attribution classes the loose extractor used to emit:
+//   - phantom SHAs (`git cat-file` fails) — e.g. epoch/worktree fragments
+//   - misattributed real commits cited in prose — e.g. a month-old commit whose
+//     committer date predates the dispatch, so it cannot have been created by it
+// Linked worktrees share the main repo's object store, so commits made inside a
+// dispatch worktree resolve from `root`. Fail-closed: any git error → reject.
+async function verifyDispatchCommit(
+  root: string,
+  sha: string,
+  completionMs: number,
+): Promise<boolean> {
+  try {
+    const { stdout: type } = await execFileAsync("git", ["-C", root, "cat-file", "-t", sha], {
+      timeout: 5000,
+    });
+    if (type.trim() !== "commit") return false;
+    const { stdout: ct } = await execFileAsync(
+      "git",
+      ["-C", root, "show", "-s", "--format=%ct", sha],
+      { timeout: 5000 },
+    );
+    const commitMs = Number(ct.trim()) * 1000;
+    if (!Number.isFinite(commitMs)) return false;
+    return (
+      commitMs >= completionMs - COMMIT_WINDOW_BEFORE_MS &&
+      commitMs <= completionMs + COMMIT_WINDOW_AFTER_MS
+    );
+  } catch {
+    return false;
+  }
+}
 
 function parseMsgOrdinal(msgId: string): number {
   const m = msgId.match(/^MSG-(\d+)$/);
@@ -79,7 +125,17 @@ export async function recentCompletions(args: RecentCompletionsArgs): Promise<Re
 
     const dispatch = await readDispatchForMsg(rolesRoot, e.msgId);
     const dispatch_subject = dispatch ? parseDispatchSubject(dispatch.raw) : "";
-    const shas = extractCommitShas(body);
+    // Take the first candidate that git confirms is a real commit produced
+    // within this dispatch's window. Unverified candidates are dropped so a
+    // counter-review (which commits nothing) reports no commit_sha.
+    const shaCandidates = extractCommitShas(body);
+    let commit_sha: string | undefined;
+    for (const cand of shaCandidates) {
+      if (await verifyDispatchCommit(rolesRoot, cand, e.mtime)) {
+        commit_sha = cand;
+        break;
+      }
+    }
     const linear = extractLinearId(frontmatter, body);
 
     out.push({
@@ -90,7 +146,7 @@ export async function recentCompletions(args: RecentCompletionsArgs): Promise<Re
       completed_at: new Date(e.mtime).toISOString(),
       status,
       duration_ms: extractDurationMs(frontmatter, body),
-      commit_sha: shas[0],
+      commit_sha,
       files_changed: extractFilesChanged(body),
       result_envelope_path: e.abs,
       result_envelope_size: stSize,
