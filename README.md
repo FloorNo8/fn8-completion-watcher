@@ -31,6 +31,7 @@ node /path/to/fn8-completion-watcher/dist/index.js
 | `pending_dispatches` | `outbox-claude-code` dispatches in last 24h missing target result + optional PID |
 | `read_result_envelope` | Parse one result file by `msgId` |
 | `acknowledge_completion` | Mark `msgId` acknowledged in `state/acknowledged.json` |
+| `completion_stats` | Summary: pending count, completions last 24h, ack count, oldest pending age (min) |
 
 ## Hook (fn8-roles)
 
