@@ -124,7 +124,9 @@ export function parseDispatchSubject(raw: string): string {
   const fm = parseFrontmatter(raw);
   const s = fm.frontmatter["subject"];
   if (typeof s === "string" && s.length > 0) return s;
-  const m = raw.match(/^\s*#\s+(.+)$/m);
+  // Match heading in the body only — searching `raw` would mis-capture YAML
+  // `# comment` lines from frontmatter as the subject.
+  const m = fm.body.match(/^\s*#\s+(.+)$/m);
   if (m) return m[1]!.trim();
   return "";
 }

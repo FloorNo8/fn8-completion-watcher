@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import { appendAudit } from "./governance/audit.js";
 import { acknowledgeCompletion } from "./tools/acknowledge-completion.js";
+import { completionStats } from "./tools/completion-stats.js";
 import { pendingDispatches } from "./tools/pending-dispatches.js";
 import { readResultEnvelope } from "./tools/read-result-envelope.js";
 import { recentCompletions } from "./tools/recent-completions.js";
@@ -132,6 +133,37 @@ export function registerTools(server: McpServer): void {
         return {
           isError: true,
           content: [{ type: "text", text: `read_result_envelope_failed:${String(err)}` }],
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    "completion_stats",
+    {
+      title: "Completion watcher summary",
+      description:
+        "Aggregates pending dispatches, recent completions (24h), acknowledged count, and " +
+        "the oldest pending dispatch age in minutes. Reuses recent_completions / " +
+        "pending_dispatches / acknowledged.json data sources.",
+      inputSchema: {},
+      annotations: {
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+        readOnlyHint: true,
+      },
+    },
+    async () => {
+      try {
+        const stats = await completionStats();
+        await audit("completion_stats", true, stats);
+        return { content: [{ type: "text", text: JSON.stringify(stats) }] };
+      } catch (err) {
+        await audit("completion_stats", false, { error: String(err) });
+        return {
+          isError: true,
+          content: [{ type: "text", text: `completion_stats_failed:${String(err)}` }],
         };
       }
     },
